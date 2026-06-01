@@ -1,0 +1,59 @@
+project:
+  name: "AutoData Agent"
+  run_mode: "smoke"
+  seed: 42
+  output_dir: "outputs"
+
+dataset:
+  name: "openlifescienceai/medmcqa"
+  use_mock_data: true
+  target_domains:
+    - "Anatomy"
+    - "Pharmacology"
+    - "Pathology"
+    - "Microbiology"
+    - "Physiology"
+  eval_samples_per_domain: 5
+  train_pool_samples_per_domain: 20
+
+models:
+  base_model: "Qwen/Qwen2.5-1.5B-Instruct"
+  generation_model: "Qwen/Qwen2.5-7B-Instruct"
+  use_real_model: false
+  use_vllm: false
+
+generation:
+  provider: "mock"
+  use_mock_generation: true
+  total_budget: 25
+  samples_per_domain: 5
+  max_new_tokens: 512
+
+planning:
+  strategy: "weakness_based"
+  min_samples_per_domain: 2
+
+mixture:
+  strategy: "weakness_based"
+
+training:
+  enabled: false
+  dry_run: true
+  method: "qlora"
+  max_seq_length: 512
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 0.0002
+  max_steps: 50
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
