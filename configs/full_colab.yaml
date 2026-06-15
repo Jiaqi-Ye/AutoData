@@ -23,8 +23,8 @@ models:
   use_vllm: false
 
 generation:
-  provider: "mock"
-  use_mock_generation: true
+  provider: "openai"
+  use_mock_generation: false
   total_budget: 2500
   samples_per_domain: 500
   max_new_tokens: 512
@@ -48,11 +48,15 @@ medical_critic:
   max_new_tokens: 384
 
 planning:
-  strategy: "weakness_based"
+  strategy: "llm_agent"
+  agent_provider: "openai"
+  agent_model: "gpt-4o-mini"
+  api_key_env: "OPENAI_API_KEY"
+  abort_on_error: true
   min_samples_per_domain: 100
 
 mixture:
-  strategy: "weakness_based"
+  strategy: "agent_guided"
 
 training:
   enabled: true

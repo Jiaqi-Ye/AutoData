@@ -39,6 +39,7 @@ OPTION_SETS = [
 
 def build_generation_prompt(request: GenerationRequest, sample_index: int) -> str:
     topic = DOMAIN_TOPICS.get(request.domain, f"core {request.domain} knowledge")
+    guidance = request.generation_guidance.strip() or "Use concrete, high-yield facts with one defensible correct answer."
     return (
         "Create one original medical multiple-choice training example for supervised fine-tuning.\n"
         "Do not quote or paraphrase any held-out evaluation question.\n"
@@ -47,29 +48,34 @@ def build_generation_prompt(request: GenerationRequest, sample_index: int) -> st
         f"Broad topic scope: {topic}\n"
         f"Desired data type: {request.data_type}\n"
         f"Planning rationale: {request.reason}\n"
+        f"LLM agent generation guidance: {guidance}\n"
         f"Sample index: {sample_index}\n"
         "Required JSON schema:\n"
         "{\n"
         f'  "domain": "{request.domain}",\n'
-        '  "instruction": "Question: ...\\nA. ...\\nB. ...\\nC. ...\\nD. ...",\n'
-        '  "response": "The correct answer is X. Explanation: ..."\n'
+        '  "question": "...",\n'
+        '  "options": {"A": "...", "B": "...", "C": "...", "D": "..."},\n'
+        '  "answer": "A",\n'
+        '  "explanation": "...",\n'
+        '  "source_fact": "The medical fact that makes the selected answer correct."\n'
         "}\n"
         "Hard constraints:\n"
-        "- instruction must include exactly one question and all four answer options labeled A., B., C., and D.\n"
+        "- question must be exactly one single-best-answer question.\n"
+        "- options must contain exactly A, B, C, and D.\n"
+        "- answer must be the single medically correct letter.\n"
         "- the question must be single-best-answer with exactly one medically correct option.\n"
         "- do not ask plural/list questions unless one option contains the complete list.\n"
         "- do not use vague stems such as 'which organism is known for severe infections'.\n"
         "- no two options may be identical, overlapping, or near-synonyms.\n"
-        "- response must start exactly with 'The correct answer is X.' where X is A, B, C, or D.\n"
-        "- after the answer letter, repeat or clearly name the selected option in the explanation.\n"
-        "- the correct letter in response must correspond to one of the four labeled options.\n"
+        "- explanation must explicitly support the selected answer and rule out the closest distractor.\n"
         "- explanation must be medically plausible and concise.\n"
-        "- do not include an options array; put options inside instruction only."
+        "- source_fact must be a compact factual anchor, not a citation or copied exam text."
     )
 
 
 def build_generation_batch_prompt(request: GenerationRequest, start_index: int, batch_size: int) -> str:
     topic = DOMAIN_TOPICS.get(request.domain, f"core {request.domain} knowledge")
+    guidance = request.generation_guidance.strip() or "Use concrete, high-yield facts with one defensible correct answer."
     return (
         f"Create exactly {batch_size} original medical multiple-choice training examples for supervised fine-tuning.\n"
         "Return ONLY one valid JSON object. Do not use markdown fences or commentary.\n"
@@ -77,29 +83,32 @@ def build_generation_batch_prompt(request: GenerationRequest, start_index: int, 
         f"Broad topic scope: {topic}\n"
         f"Desired data type: {request.data_type}\n"
         f"Planning rationale: {request.reason}\n"
+        f"LLM agent generation guidance: {guidance}\n"
         f"Sample indices: {start_index} through {start_index + batch_size - 1}\n"
         "Required JSON schema:\n"
         "{\n"
         '  "samples": [\n'
         "    {\n"
         f'      "domain": "{request.domain}",\n'
-        '      "instruction": "Question: ...\\nA. ...\\nB. ...\\nC. ...\\nD. ...",\n'
-        '      "response": "The correct answer is X. Explanation: ..."\n'
+        '      "question": "...",\n'
+        '      "options": {"A": "...", "B": "...", "C": "...", "D": "..."},\n'
+        '      "answer": "A",\n'
+        '      "explanation": "...",\n'
+        '      "source_fact": "The medical fact that makes the selected answer correct."\n'
         "    }\n"
         "  ]\n"
         "}\n"
         "Hard constraints for every sample:\n"
         "- Use only facts you are confident are medically correct.\n"
         "- The question must have exactly one best answer.\n"
-        "- The response answer letter must match the exact correct option text.\n"
+        "- answer must match the exact correct option text.\n"
         "- Distractors must be plausible but clearly wrong.\n"
         "- Avoid duplicate stems, repeated facts, and option-order-only variants within this batch.\n"
         "- Do not ask plural/list questions unless one option contains the complete list.\n"
         "- Do not use vague stems such as 'which organism is known for severe infections'.\n"
-        "- instruction must include exactly one question and options labeled A., B., C., and D.\n"
-        "- response must start exactly with 'The correct answer is X.' where X is A, B, C, or D.\n"
-        "- After the answer letter, name the selected option and give a concise explanation.\n"
-        "- Do not include an options array; put options inside instruction only."
+        "- options must contain exactly A, B, C, and D with no duplicate or near-synonym choices.\n"
+        "- explanation must explicitly support the selected answer and rule out the closest distractor.\n"
+        "- source_fact must be a compact factual anchor, not a citation or copied exam text."
     )
 
 

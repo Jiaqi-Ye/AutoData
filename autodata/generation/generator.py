@@ -21,8 +21,8 @@ class DataGenerator:
                 num_samples=domain_plan.num_samples,
                 data_type=domain_plan.data_type,
                 reason=domain_plan.reason,
+                generation_guidance=domain_plan.generation_guidance,
                 round_id=round_id,
             )
             samples.extend(self.provider.generate(request, self.config))
         return samples
-

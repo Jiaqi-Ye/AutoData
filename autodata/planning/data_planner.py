@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List
 
 from autodata.config import get_target_domains
 from autodata.data.schemas import DataPlan, DiagnosisResult, DomainPlan, EvaluationResult
+from autodata.planning.llm_agent import LLMDataPlanningAgent
 
 
 DATA_TYPES = {
@@ -27,17 +28,40 @@ class DataPlanner:
         total_budget = int(self.config.get("generation", {}).get("total_budget", 0))
         min_samples = int(self.config.get("planning", {}).get("min_samples_per_domain", 0))
         target_domains = get_target_domains(self.config)
-        return build_data_plan(
-            strategy=strategy,
+        fallback_plan = build_data_plan(
+            strategy="weakness_based" if strategy == "llm_agent" else strategy,
             total_budget=total_budget,
             min_samples_per_domain=min_samples,
             target_domains=target_domains,
             evaluation=evaluation,
             diagnosis=diagnosis,
         )
+        if strategy == "llm_agent":
+            return LLMDataPlanningAgent(self.config).create_plan(evaluation, diagnosis, fallback_plan)
+        return fallback_plan
 
 
 def build_data_plan(
+    strategy: str,
+    total_budget: int,
+    min_samples_per_domain: int,
+    target_domains: Iterable[str],
+    evaluation: EvaluationResult,
+    diagnosis: DiagnosisResult,
+) -> DataPlan:
+    if strategy == "llm_agent":
+        strategy = "agent_guided"
+    return _build_data_plan(
+        strategy=strategy,
+        total_budget=total_budget,
+        min_samples_per_domain=min_samples_per_domain,
+        target_domains=target_domains,
+        evaluation=evaluation,
+        diagnosis=diagnosis,
+    )
+
+
+def _build_data_plan(
     strategy: str,
     total_budget: int,
     min_samples_per_domain: int,
@@ -139,4 +163,3 @@ def _allocate_weakness_based(
     for domain in ranked_remainders[:shortfall]:
         allocations[domain] += 1
     return allocations
-

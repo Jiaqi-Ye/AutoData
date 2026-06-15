@@ -65,6 +65,7 @@ def data_plan_from_dict(payload: Dict[str, Any]) -> "DataPlan":
                 num_samples=int(item["num_samples"]),
                 data_type=str(item["data_type"]),
                 reason=str(item["reason"]),
+                generation_guidance=str(item.get("generation_guidance", "")),
             )
             for domain, item in payload["plan"].items()
         },
@@ -153,6 +154,7 @@ class DomainPlan:
     num_samples: int
     data_type: str
     reason: str
+    generation_guidance: str = ""
 
     def __post_init__(self) -> None:
         if self.num_samples < 0:
@@ -175,6 +177,7 @@ class GenerationRequest:
     num_samples: int
     data_type: str
     reason: str
+    generation_guidance: str = ""
     round_id: str = "round_1"
 
 

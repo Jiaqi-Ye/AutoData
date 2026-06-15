@@ -4,6 +4,7 @@ from autodata.generation.providers import (
     _parse_generated_json,
     _parse_generated_json_samples_with_status,
 )
+from autodata.generation.prompts import build_generation_batch_prompt
 
 
 def test_parse_generated_json_accepts_pure_json():
@@ -86,6 +87,23 @@ def test_parse_generated_json_samples_accepts_samples_wrapper():
     assert len(parsed) == 2
     assert "A. Trigeminal nerve" in parsed[0]["instruction"]
     assert parsed[1]["response"].startswith("The correct answer is D.")
+
+
+def test_generation_batch_prompt_uses_fact_first_schema_and_agent_guidance():
+    request = GenerationRequest(
+        domain="Pharmacology",
+        num_samples=5,
+        data_type="MCQ",
+        reason="LLM agent plan",
+        generation_guidance="Prioritize adverse effects and antidotes.",
+    )
+
+    prompt = build_generation_batch_prompt(request, start_index=0, batch_size=5)
+
+    assert '"question": "..."' in prompt
+    assert '"options": {"A": "...", "B": "...", "C": "...", "D": "..."}' in prompt
+    assert '"answer": "A"' in prompt
+    assert "Prioritize adverse effects and antidotes." in prompt
 
 
 def test_openai_generation_provider_batches_five_per_call():
