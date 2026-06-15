@@ -184,6 +184,8 @@ The evaluator uses Hugging Face Transformers and asks the model to answer with o
 
 If Colab raises a `pyarrow.lib.IpcReadOptions size changed` error after switching to real MedMCQA loading, rerun the dependency cell. The notebook reinstalls `pyarrow` and `datasets` together, restarts the runtime once, and then you should run the notebook from the top again.
 
+If PEFT raises `Found an incompatible version of torchao` while loading a LoRA adapter for re-evaluation, install `torchao==0.16.0` and restart the runtime. The notebook includes this dependency in the real-run install cell.
+
 ## Enabling QLoRA Training
 
 Set:
