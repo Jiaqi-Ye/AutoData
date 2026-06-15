@@ -28,6 +28,10 @@ generation:
   total_budget: 2500
   samples_per_domain: 500
   max_new_tokens: 512
+  api_model: "gpt-4o-mini"
+  api_batch_size: 5
+  api_max_output_tokens: 2400
+  api_key_env: "OPENAI_API_KEY"
 
 verification:
   near_duplicate_threshold: 0.995

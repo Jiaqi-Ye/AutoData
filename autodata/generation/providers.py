@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from autodata.data.schemas import GenerationRequest, SFTSample
-from autodata.generation.prompts import build_generation_prompt, build_mock_instruction, build_mock_response
+from autodata.generation.prompts import (
+    build_generation_batch_prompt,
+    build_generation_prompt,
+    build_mock_instruction,
+    build_mock_response,
+)
 
 
 def _slug(value: str) -> str:
@@ -143,6 +149,117 @@ class APIGenerationProvider(GenerationProvider):
         )
 
 
+class OpenAIGenerationProvider(GenerationProvider):
+    name = "openai"
+
+    def __init__(self) -> None:
+        self._client = None
+
+    def _load_client(self, config: Dict[str, Any]):
+        if self._client is not None:
+            return self._client
+        generation_config = config.get("generation", {})
+        api_key_env = str(generation_config.get("api_key_env", "OPENAI_API_KEY"))
+        if not os.environ.get(api_key_env):
+            raise RuntimeError(f"generation.provider=openai requires ${api_key_env}.")
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError("Install the optional openai package for generation.provider=openai.") from exc
+        self._client = OpenAI(api_key=os.environ.get(api_key_env), timeout=float(generation_config.get("timeout_seconds", 120)))
+        return self._client
+
+    def generate(self, request: GenerationRequest, config: Dict[str, Any]) -> List[SFTSample]:
+        generation_config = config.get("generation", {})
+        model_name = str(
+            generation_config.get("api_model")
+            or generation_config.get("model")
+            or config.get("models", {}).get("generation_model")
+            or "gpt-4o-mini"
+        )
+        batch_size = max(1, int(generation_config.get("api_batch_size", 5)))
+        max_output_tokens = int(generation_config.get("api_max_output_tokens", max(1200, batch_size * 450)))
+        temperature = float(generation_config.get("temperature", 0.2))
+        client = self._load_client(config)
+        samples: List[SFTSample] = []
+
+        for batch_start in range(0, request.num_samples, batch_size):
+            current_batch_size = min(batch_size, request.num_samples - batch_start)
+            prompt = build_generation_batch_prompt(request, batch_start, current_batch_size)
+            decoded = self._chat_json_object(
+                client=client,
+                model_name=model_name,
+                prompt=prompt,
+                max_output_tokens=max_output_tokens,
+                temperature=temperature,
+            )
+            parsed_items, parse_status = _parse_generated_json_samples_with_status(decoded)
+            for batch_index in range(current_batch_size):
+                sample_index = batch_start + batch_index
+                parsed = parsed_items[batch_index] if batch_index < len(parsed_items) else {}
+                parse_error = "none" if parsed else "missing_batch_item"
+                samples.append(
+                    SFTSample(
+                        id=f"{request.round_id}-{_slug(request.domain)}-{sample_index}",
+                        domain=str(parsed.get("domain", request.domain)),
+                        instruction=str(parsed.get("instruction", prompt)),
+                        response=str(parsed.get("response", decoded)),
+                        source="openai",
+                        generation_model=model_name,
+                        round_id=request.round_id,
+                        metadata={
+                            "raw_output": decoded,
+                            "sample_index": sample_index,
+                            "api_batch_start": batch_start,
+                            "api_batch_index": batch_index,
+                            "api_batch_size": current_batch_size,
+                            "parse_error": parse_error,
+                            "json_parse_status": parse_status,
+                            "prompt_format": "openai_chat_json_object",
+                        },
+                    )
+                )
+        return samples
+
+    def _chat_json_object(
+        self,
+        client,
+        model_name: str,
+        prompt: str,
+        max_output_tokens: int,
+        temperature: float,
+    ) -> str:
+        kwargs = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a careful medical educator generating training data. "
+                        "Return JSON only. Each answer must be medically correct and match the selected option."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": temperature,
+            "max_tokens": max_output_tokens,
+        }
+        try:
+            response = client.chat.completions.create(**kwargs)
+        except Exception as first_exc:
+            fallback_kwargs = dict(kwargs)
+            fallback_kwargs.pop("temperature", None)
+            try:
+                response = client.chat.completions.create(**fallback_kwargs)
+            except Exception as second_exc:
+                raise RuntimeError(
+                    f"OpenAI generation failed: {type(first_exc).__name__}: {first_exc}; "
+                    f"retry_without_temperature={type(second_exc).__name__}: {second_exc}"
+                ) from second_exc
+        return str(response.choices[0].message.content or "")
+
+
 class StrongLocalGenerationProvider(LocalHFGenerationProvider):
     name = "strong_local"
 
@@ -176,6 +293,62 @@ def _parse_generated_json_with_status(text: str) -> tuple[Dict[str, Any], str]:
     if not parsed.get("instruction") or not parsed.get("response"):
         return {}, "missing_required_fields"
     return parsed, parse_status
+
+
+def _parse_generated_json_samples_with_status(text: str) -> Tuple[List[Dict[str, Any]], str]:
+    payload, parse_status = _load_json_any_payload(text)
+    if payload is None:
+        return [], parse_status
+    raw_items: List[Any]
+    if isinstance(payload, list):
+        raw_items = payload
+    elif isinstance(payload, dict):
+        for key in ("samples", "items", "questions", "data"):
+            if isinstance(payload.get(key), list):
+                raw_items = payload[key]
+                break
+        else:
+            raw_items = [payload]
+    else:
+        return [], parse_status
+
+    parsed_items: List[Dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        parsed = _normalize_generated_payload(item)
+        if parsed.get("instruction") and parsed.get("response"):
+            parsed_items.append(parsed)
+    if not parsed_items:
+        return [], "missing_required_fields"
+    return parsed_items, parse_status
+
+
+def _load_json_any_payload(text: str) -> tuple[Any | None, str]:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return None, "empty_generation"
+    decoder = json.JSONDecoder()
+
+    try:
+        parsed, end = decoder.raw_decode(stripped)
+    except json.JSONDecodeError:
+        parsed = None
+    else:
+        if isinstance(parsed, (dict, list)):
+            remainder = stripped[end:].strip()
+            return parsed, "pure_json" if not remainder else "extracted_json"
+
+    for start, character in enumerate(stripped):
+        if character not in "{[":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(stripped[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, (dict, list)):
+            return parsed, "extracted_json"
+    return None, "invalid_json"
 
 
 def _load_json_payload(text: str) -> tuple[Dict[str, Any], str]:
@@ -329,7 +502,9 @@ def get_generation_provider(config: Dict[str, Any]) -> GenerationProvider:
         return MockGenerationProvider()
     if provider_name in {"local_hf", "small_local"}:
         return LocalHFGenerationProvider()
-    if provider_name in {"api", "api_placeholder"}:
+    if provider_name in {"openai", "gpt", "api"}:
+        return OpenAIGenerationProvider()
+    if provider_name == "api_placeholder":
         return APIGenerationProvider()
     if provider_name in {"strong_local", "optional_stronger_local"}:
         return StrongLocalGenerationProvider()

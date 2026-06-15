@@ -1,4 +1,9 @@
-from autodata.generation.providers import _parse_generated_json
+from autodata.data.schemas import GenerationRequest
+from autodata.generation.providers import (
+    OpenAIGenerationProvider,
+    _parse_generated_json,
+    _parse_generated_json_samples_with_status,
+)
 
 
 def test_parse_generated_json_accepts_pure_json():
@@ -54,3 +59,104 @@ def test_parse_generated_json_builds_response_from_answer_and_explanation():
     )
     assert "A. Acyclovir" in parsed["instruction"]
     assert parsed["response"].startswith("The correct answer is A.")
+
+
+def test_parse_generated_json_samples_accepts_samples_wrapper():
+    parsed, status = _parse_generated_json_samples_with_status(
+        """
+        {
+          "samples": [
+            {
+              "domain": "Anatomy",
+              "question": "Which nerve innervates the masseter?",
+              "options": {"A": "Trigeminal nerve", "B": "Facial nerve", "C": "Vagus nerve", "D": "Hypoglossal nerve"},
+              "answer": "A",
+              "explanation": "The mandibular division of CN V supplies muscles of mastication."
+            },
+            {
+              "domain": "Microbiology",
+              "instruction": "Question: Which organism causes botulism?\\nA. C. difficile\\nB. S. aureus\\nC. E. coli\\nD. C. botulinum",
+              "response": "The correct answer is D. Explanation: C. botulinum produces botulinum toxin."
+            }
+          ]
+        }
+        """
+    )
+    assert status == "pure_json"
+    assert len(parsed) == 2
+    assert "A. Trigeminal nerve" in parsed[0]["instruction"]
+    assert parsed[1]["response"].startswith("The correct answer is D.")
+
+
+def test_openai_generation_provider_batches_five_per_call():
+    provider = OpenAIGenerationProvider()
+    provider._client = FakeOpenAIClient()
+    request = GenerationRequest(
+        domain="Anatomy",
+        num_samples=7,
+        data_type="MCQ",
+        reason="test",
+        round_id="round_1",
+    )
+    samples = provider.generate(
+        request,
+        {
+            "models": {"generation_model": "unused"},
+            "generation": {"api_model": "gpt-test", "api_batch_size": 5},
+        },
+    )
+
+    assert len(samples) == 7
+    assert len(provider._client.chat.completions.calls) == 2
+    assert samples[0].source == "openai"
+    assert samples[0].generation_model == "gpt-test"
+    assert samples[5].metadata["api_batch_size"] == 2
+
+
+class FakeOpenAIClient:
+    def __init__(self):
+        self.chat = FakeChat()
+
+
+class FakeChat:
+    def __init__(self):
+        self.completions = FakeCompletions()
+
+
+class FakeCompletions:
+    def __init__(self):
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        requested = 5 if len(self.calls) == 1 else 2
+        rows = []
+        for index in range(requested):
+            rows.append(
+                {
+                    "domain": "Anatomy",
+                    "instruction": (
+                        f"Question: Which structure is example {index}?\\n"
+                        "A. Correct structure\\nB. Distractor one\\nC. Distractor two\\nD. Distractor three"
+                    ),
+                    "response": "The correct answer is A. Explanation: Correct structure is correct.",
+                }
+            )
+        return FakeResponse({"samples": rows})
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        import json
+
+        self.choices = [FakeChoice(json.dumps(payload))]
+
+
+class FakeChoice:
+    def __init__(self, content):
+        self.message = FakeMessage(content)
+
+
+class FakeMessage:
+    def __init__(self, content):
+        self.content = content

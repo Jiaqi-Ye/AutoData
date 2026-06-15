@@ -68,6 +68,41 @@ def build_generation_prompt(request: GenerationRequest, sample_index: int) -> st
     )
 
 
+def build_generation_batch_prompt(request: GenerationRequest, start_index: int, batch_size: int) -> str:
+    topic = DOMAIN_TOPICS.get(request.domain, f"core {request.domain} knowledge")
+    return (
+        f"Create exactly {batch_size} original medical multiple-choice training examples for supervised fine-tuning.\n"
+        "Return ONLY one valid JSON object. Do not use markdown fences or commentary.\n"
+        f"Domain: {request.domain}\n"
+        f"Broad topic scope: {topic}\n"
+        f"Desired data type: {request.data_type}\n"
+        f"Planning rationale: {request.reason}\n"
+        f"Sample indices: {start_index} through {start_index + batch_size - 1}\n"
+        "Required JSON schema:\n"
+        "{\n"
+        '  "samples": [\n'
+        "    {\n"
+        f'      "domain": "{request.domain}",\n'
+        '      "instruction": "Question: ...\\nA. ...\\nB. ...\\nC. ...\\nD. ...",\n'
+        '      "response": "The correct answer is X. Explanation: ..."\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "Hard constraints for every sample:\n"
+        "- Use only facts you are confident are medically correct.\n"
+        "- The question must have exactly one best answer.\n"
+        "- The response answer letter must match the exact correct option text.\n"
+        "- Distractors must be plausible but clearly wrong.\n"
+        "- Avoid duplicate stems, repeated facts, and option-order-only variants within this batch.\n"
+        "- Do not ask plural/list questions unless one option contains the complete list.\n"
+        "- Do not use vague stems such as 'which organism is known for severe infections'.\n"
+        "- instruction must include exactly one question and options labeled A., B., C., and D.\n"
+        "- response must start exactly with 'The correct answer is X.' where X is A, B, C, or D.\n"
+        "- After the answer letter, name the selected option and give a concise explanation.\n"
+        "- Do not include an options array; put options inside instruction only."
+    )
+
+
 def build_mock_instruction(domain: str, sample_index: int) -> str:
     terms = FOCUS_TERMS.get(domain, [f"core {domain} knowledge"])
     focus = terms[sample_index % len(terms)]

@@ -82,6 +82,18 @@ USE_MOCK_GENERATION = False
 GENERATION_PROVIDER = "local_hf"
 ```
 
+To generate synthetic data with the OpenAI API instead of a local generator, use:
+
+```python
+USE_MOCK_GENERATION = False
+GENERATION_PROVIDER = "openai"
+GENERATION_API_MODEL = "gpt-4o-mini"
+GENERATION_API_BATCH_SIZE = 5
+TOTAL_SYNTHETIC_BUDGET = 100
+```
+
+The OpenAI provider generates `GENERATION_API_BATCH_SIZE` samples per API call and writes standard `SFTSample` rows before the same rule verifier and medical critic stages.
+
 ### Optional Medical Critic
 
 The rule verifier checks format, leakage, duplicates, option structure, and shallow answer-option consistency. For real generated medical MCQs, add the optional LLM medical critic after rule verification and before mixture/training:
@@ -266,7 +278,7 @@ If `efficiency_aware` has no previous-round efficiency history, it falls back to
 
 - Agent-guided planning is currently a structured heuristic, not an API-backed LLM planner.
 - Medical factual verification now supports an optional LLM critic, but its quality depends on the critic model and prompt calibration.
-- Real generation is available as a local Hugging Face provider, while API generation is a placeholder.
+- Real generation is available through local Hugging Face models or the OpenAI API provider.
 - Full multi-round orchestration still needs a dedicated runner; single-round runs now emit the next-round recommendation needed for that extension.
 
 ## Future Work
