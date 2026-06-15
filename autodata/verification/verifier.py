@@ -12,7 +12,46 @@ from autodata.data.schemas import MedMCQAExample, SFTSample, VerificationResult,
 from autodata.evaluation.answer_parser import parse_answer
 
 OPTION_PATTERN = re.compile(r"(?im)^\s*([ABCD])[\.\)]\s+\S+")
+OPTION_TEXT_PATTERN = re.compile(r"(?im)^\s*([ABCD])[\.\)]\s*(.+?)\s*$")
 RESPONSE_PREFIX_PATTERN = re.compile(r"^\s*The correct answer is ([ABCD])\.", re.IGNORECASE)
+AMBIGUOUS_STEM_PATTERNS = [
+    re.compile(r"\bmain branches\b", re.IGNORECASE),
+    re.compile(r"\bknown for (?:its|their) ability to cause\b", re.IGNORECASE),
+    re.compile(r"\bhigh levels of virulence factors\b", re.IGNORECASE),
+]
+STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "best",
+    "by",
+    "can",
+    "cause",
+    "correct",
+    "due",
+    "explanation",
+    "for",
+    "from",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "leading",
+    "of",
+    "option",
+    "or",
+    "production",
+    "question",
+    "secretion",
+    "the",
+    "this",
+    "to",
+    "which",
+    "with",
+}
 
 
 def normalize_text(text: str) -> str:
@@ -38,6 +77,10 @@ class DataVerifier:
         self.leakage_threshold = float(verification_config.get("leakage_threshold", 0.88))
         self.max_instruction_chars = int(verification_config.get("max_instruction_chars", 4000))
         self.max_response_chars = int(verification_config.get("max_response_chars", 4000))
+        self.option_duplicate_threshold = float(verification_config.get("option_duplicate_threshold", 0.98))
+        self.option_response_overlap_threshold = float(
+            verification_config.get("option_response_overlap_threshold", 0.40)
+        )
 
     def verify(
         self,
@@ -93,8 +136,8 @@ class DataVerifier:
             return False, "response_too_long"
         if sample.source == "local_hf" and sample.metadata.get("parse_error") != "none":
             return False, "invalid_generation_json"
-        options = self._option_labels(sample.instruction)
-        if options != {"A", "B", "C", "D"}:
+        options = self._options(sample.instruction)
+        if set(options) != {"A", "B", "C", "D"}:
             return False, "missing_mcq_options"
         response_answer = self._response_answer(sample.response)
         if response_answer is None:
@@ -103,6 +146,12 @@ class DataVerifier:
             return False, "missing_clear_answer"
         if response_answer not in options:
             return False, "answer_option_missing"
+        if self._has_duplicate_options(options):
+            return False, "ambiguous_duplicate_options"
+        if self._has_ambiguous_stem(sample.instruction):
+            return False, "ambiguous_question_stem"
+        if sample.source != "mock" and not self._answer_matches_option(sample.response, response_answer, options):
+            return False, "answer_option_mismatch"
         fingerprint = self._fingerprint(sample)
         if fingerprint in exact_seen:
             return False, "duplicate"
@@ -118,11 +167,69 @@ class DataVerifier:
     def _option_labels(self, instruction: str) -> set[str]:
         return {match.group(1).upper() for match in OPTION_PATTERN.finditer(instruction)}
 
+    def _options(self, instruction: str) -> Dict[str, str]:
+        return {
+            match.group(1).upper(): match.group(2).strip()
+            for match in OPTION_TEXT_PATTERN.finditer(instruction)
+            if match.group(2).strip()
+        }
+
     def _response_answer(self, response: str) -> str | None:
         match = RESPONSE_PREFIX_PATTERN.search(response)
         if not match:
             return None
         return match.group(1).upper()
+
+    def _has_duplicate_options(self, options: Dict[str, str]) -> bool:
+        items = list(options.items())
+        for index, (_, left) in enumerate(items):
+            left_norm = normalize_text(left)
+            for _, right in items[index + 1 :]:
+                right_norm = normalize_text(right)
+                if left_norm and left_norm == right_norm:
+                    return True
+                if (
+                    text_similarity(left, right) >= self.option_duplicate_threshold
+                    and self._content_tokens(left) == self._content_tokens(right)
+                ):
+                    return True
+        return False
+
+    def _has_ambiguous_stem(self, instruction: str) -> bool:
+        question = self._question_text(instruction)
+        return any(pattern.search(question) for pattern in AMBIGUOUS_STEM_PATTERNS)
+
+    def _answer_matches_option(self, response: str, answer: str, options: Dict[str, str]) -> bool:
+        selected_text = options[answer]
+        selected_score = self._option_response_overlap(selected_text, response)
+        other_scores = [
+            self._option_response_overlap(text, response)
+            for label, text in options.items()
+            if label != answer
+        ]
+        if selected_score >= self.option_response_overlap_threshold:
+            return True
+        if other_scores and max(other_scores) >= selected_score + 0.25:
+            return False
+        return selected_score > 0
+
+    def _option_response_overlap(self, option_text: str, response: str) -> float:
+        option_tokens = self._content_tokens(option_text)
+        if not option_tokens:
+            return 0.0
+        response_tokens = self._content_tokens(response)
+        overlap = option_tokens.intersection(response_tokens)
+        return len(overlap) / len(option_tokens)
+
+    def _content_tokens(self, text: str) -> set[str]:
+        tokens = set(normalize_text(text).split())
+        return {token for token in tokens if len(token) > 2 and token not in STOPWORDS}
+
+    def _question_text(self, instruction: str) -> str:
+        lines = [line.strip() for line in instruction.splitlines() if line.strip()]
+        question_lines = [line for line in lines if not OPTION_TEXT_PATTERN.match(line)]
+        question = " ".join(question_lines)
+        return re.sub(r"^\s*Question:\s*", "", question, flags=re.IGNORECASE).strip()
 
     def _is_near_duplicate(self, sample: SFTSample, accepted: List[SFTSample]) -> bool:
         for existing in accepted:

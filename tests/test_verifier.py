@@ -24,11 +24,12 @@ def sample(
     domain: str = "Anatomy",
     source: str = "test",
     metadata: dict | None = None,
+    response: str = "The correct answer is A. Explanation: First option is correct.",
 ) -> SFTSample:
     return SFTSample(
         domain=domain,
         instruction=instruction,
-        response="The correct answer is A. Explanation: concise rationale.",
+        response=response,
         source=source,
         generation_model="mock",
         round_id="round_1",
@@ -87,3 +88,58 @@ def test_verifier_accepts_strict_local_hf_sample():
     result = verifier.verify([good], [make_eval_question()])
     assert len(result.accepted) == 1
     assert len(result.rejected) == 0
+
+
+def test_verifier_rejects_duplicate_options():
+    verifier = DataVerifier(make_config())
+    bad = sample(
+        "Question: What is a key histological feature of squamous cell carcinoma?\n"
+        "A. Keratin pearls\n"
+        "B. Basal cell hyperplasia\n"
+        "C. Keratin pearls\n"
+        "D. Mucinous glands",
+        source="local_hf",
+        metadata={"parse_error": "none"},
+        response="The correct answer is C. Explanation: Keratin pearls are characteristic.",
+    )
+    result = verifier.verify([bad], [make_eval_question()])
+    assert len(result.accepted) == 0
+    assert result.rejected[0]["reason"] == "ambiguous_duplicate_options"
+
+
+def test_verifier_rejects_answer_option_mismatch():
+    verifier = DataVerifier(make_config())
+    bad = sample(
+        "Question: Which mechanism explains why aspirin can cause gastrointestinal bleeding?\n"
+        "A. Aspirin increases blood clotting\n"
+        "B. Aspirin enhances stomach acid secretion\n"
+        "C. Aspirin blocks platelet aggregation\n"
+        "D. Aspirin reduces prostaglandin synthesis",
+        domain="Pharmacology",
+        source="local_hf",
+        metadata={"parse_error": "none"},
+        response=(
+            "The correct answer is C. Explanation: Aspirin inhibits cyclooxygenase enzymes, "
+            "leading to reduced prostaglandin production."
+        ),
+    )
+    result = verifier.verify([bad], [make_eval_question()])
+    assert len(result.accepted) == 0
+    assert result.rejected[0]["reason"] == "answer_option_mismatch"
+
+
+def test_verifier_rejects_ambiguous_question_stem():
+    verifier = DataVerifier(make_config())
+    bad = sample(
+        "Question: What are the main branches of the left coronary artery?\n"
+        "A. The left circumflex artery\n"
+        "B. The right coronary artery\n"
+        "C. The left anterior descending artery\n"
+        "D. The posterior interventricular artery",
+        source="local_hf",
+        metadata={"parse_error": "none"},
+        response="The correct answer is C. Explanation: The left anterior descending artery is a branch.",
+    )
+    result = verifier.verify([bad], [make_eval_question()])
+    assert len(result.accepted) == 0
+    assert result.rejected[0]["reason"] == "ambiguous_question_stem"
