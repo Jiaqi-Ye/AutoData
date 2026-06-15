@@ -52,15 +52,24 @@ class MockGenerationProvider(GenerationProvider):
 class LocalHFGenerationProvider(GenerationProvider):
     name = "local_hf"
 
-    def generate(self, request: GenerationRequest, config: Dict[str, Any]) -> List[SFTSample]:
+    def __init__(self) -> None:
+        self._model_name: str | None = None
+        self._tokenizer = None
+        self._model = None
+
+    def _load_model(self, model_name: str):
+        if self._model is not None and self._tokenizer is not None and self._model_name == model_name:
+            return self._tokenizer, self._model
+
         try:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
         except ImportError as exc:
             raise RuntimeError("Install torch and transformers for local_hf generation.") from exc
 
-        model_name = config.get("generation", {}).get("local_model") or config.get("models", {}).get("generation_model")
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
         dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -69,6 +78,20 @@ class LocalHFGenerationProvider(GenerationProvider):
             trust_remote_code=True,
         )
         model.eval()
+
+        self._model_name = model_name
+        self._tokenizer = tokenizer
+        self._model = model
+        return tokenizer, model
+
+    def generate(self, request: GenerationRequest, config: Dict[str, Any]) -> List[SFTSample]:
+        try:
+            import torch
+        except ImportError as exc:
+            raise RuntimeError("Install torch and transformers for local_hf generation.") from exc
+
+        model_name = config.get("generation", {}).get("local_model") or config.get("models", {}).get("generation_model")
+        tokenizer, model = self._load_model(model_name)
         max_new_tokens = int(config.get("generation", {}).get("max_new_tokens", 512))
         samples: List[SFTSample] = []
         for index in range(request.num_samples):

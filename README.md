@@ -54,25 +54,33 @@ Smoke mode should finish without a GPU, API keys, MedMCQA downloads, or Qwen mod
 ## Google Colab Setup
 
 1. Open `notebooks/AutoData_Colab_Demo.ipynb`.
-2. Mount Google Drive.
-3. Install dependencies.
-4. Clone your GitHub copy of this repository.
-5. Start with:
+2. Set `REPO_URL` to your GitHub copy of this repository, or set `USE_DRIVE_REPO=True` if the repo is already in Google Drive.
+3. Run the notebook from top to bottom.
+4. Start with:
 
 ```python
 RUN_MODE = "smoke"
 USE_REAL_MODEL = False
 USE_REAL_TRAINING = False
 USE_MOCK_GENERATION = True
+RUN_STRATEGY_COMPARISON = False
 ```
 
-When the smoke run is working, switch to:
+When the smoke run is working, switch to a real-model prototype:
 
 ```python
 RUN_MODE = "prototype"
 USE_REAL_MODEL = True
 USE_REAL_TRAINING = True
+USE_MOCK_GENERATION = True
+RUN_STRATEGY_COMPARISON = False
+```
+
+For the first real Qwen experiment, keeping `USE_MOCK_GENERATION=True` is cheaper because it tests real MedMCQA loading, real Qwen evaluation, QLoRA training, verification, mixture construction, and reporting without loading the larger generation model. When ready for real synthetic generation, set:
+
+```python
 USE_MOCK_GENERATION = False
+GENERATION_PROVIDER = "local_hf"
 ```
 
 ## Output Location
@@ -104,6 +112,7 @@ mixture_train.jsonl
 mixture_report.json
 training_report.json
 evaluation_after.json
+next_round_recommendation.json
 round_summary.json
 ```
 
@@ -124,6 +133,12 @@ Purpose: verify that the whole pipeline works.
 
 ```bash
 python scripts/run_full_loop.py --config configs/smoke_colab.yaml
+```
+
+To compare the first three planned strategies in one command:
+
+```bash
+python scripts/run_strategy_comparison.py --config configs/smoke_colab.yaml
 ```
 
 ### Prototype
@@ -211,19 +226,19 @@ If `efficiency_aware` has no previous-round efficiency history, it falls back to
 - Evaluation can run the real Qwen base model through Transformers.
 - Training can run QLoRA through Transformers, PEFT, bitsandbytes, and TRL.
 - Verification, planning, mixture optimization, artifact writing, and metric reporting are real code paths in every mode.
+- Each run now writes `next_round_recommendation.json`, including per-domain gain, learning efficiency, and suggested next-round focus domains.
 
 ## Current Limitations
 
 - Agent-guided planning is currently a structured heuristic, not an API-backed LLM planner.
 - Medical factual verification is rule-based; future work should add optional expert-model review.
 - Real generation is available as a local Hugging Face provider, while API generation is a placeholder.
-- Multi-round efficiency-aware optimization is scaffolded but needs previous-round result plumbing for full experiments.
+- Full multi-round orchestration still needs a dedicated runner; single-round runs now emit the next-round recommendation needed for that extension.
 
 ## Future Work
 
 - Add stronger medical quality verification.
 - Add multi-round experiment orchestration.
-- Add statistical comparison scripts for uniform vs weakness-based vs agent-guided mixtures.
+- Add statistical aggregation across repeated seeds for uniform vs weakness-based vs agent-guided mixtures.
 - Add richer MedMCQA subject normalization and cached processed datasets.
 - Add optional vLLM provider for larger generation runs, without making it a default dependency.
-

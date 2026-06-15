@@ -10,7 +10,7 @@ from autodata.data.medmcqa_loader import load_medmcqa_data
 from autodata.data.schemas import LoopRoundResult, to_jsonable
 from autodata.diagnosis.weakness_diagnoser import WeaknessDiagnoser
 from autodata.evaluation.evaluator import Evaluator
-from autodata.evaluation.metrics import compare_evaluations, system_metrics
+from autodata.evaluation.metrics import compare_evaluations, next_round_recommendation, system_metrics
 from autodata.generation.generator import DataGenerator
 from autodata.mixture.mixture_optimizer import MixtureOptimizer
 from autodata.planning.data_planner import DataPlanner
@@ -70,6 +70,8 @@ def run_autodata_loop(config: Dict[str, Any]) -> LoopRoundResult:
     clear_gpu_memory()
 
     model_metrics = compare_evaluations(evaluation_base, evaluation_after)
+    next_round = next_round_recommendation(evaluation_base, evaluation_after, mixture.samples)
+    write_json(run_dir / "next_round_recommendation.json", next_round)
     auto_metrics = system_metrics(
         generated_samples=generated_samples,
         accepted_samples=verification.accepted,
@@ -80,6 +82,7 @@ def run_autodata_loop(config: Dict[str, Any]) -> LoopRoundResult:
     metrics = {
         "model_level": model_metrics,
         "system_level": auto_metrics,
+        "next_round": next_round,
         "train_pool_size": len(train_pool),
     }
 
@@ -94,6 +97,7 @@ def run_autodata_loop(config: Dict[str, Any]) -> LoopRoundResult:
         "accepted_count": len(verification.accepted),
         "mixture_sample_count": len(mixture.samples),
         "training_status": training_report.status,
+        "next_round_focus_domains": next_round["recommended_focus_domains"],
         "metrics": to_jsonable(metrics),
     }
     write_json(run_dir / "round_summary.json", round_summary)
@@ -110,4 +114,3 @@ def run_autodata_loop(config: Dict[str, Any]) -> LoopRoundResult:
         evaluation_after=evaluation_after,
         metrics=metrics,
     )
-
