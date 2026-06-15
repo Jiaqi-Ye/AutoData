@@ -96,13 +96,15 @@ class LocalHFGenerationProvider(GenerationProvider):
         samples: List[SFTSample] = []
         for index in range(request.num_samples):
             prompt = build_generation_prompt(request, index)
-            inputs = tokenizer(prompt, return_tensors="pt")
+            rendered_prompt = _render_generation_prompt(tokenizer, prompt)
+            inputs = tokenizer(rendered_prompt, return_tensors="pt")
             if torch.cuda.is_available():
                 inputs = {key: value.to(model.device) for key, value in inputs.items()}
             with torch.no_grad():
-                output = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=True, temperature=0.7)
+                output = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
             decoded = tokenizer.decode(output[0][inputs["input_ids"].shape[-1] :], skip_special_tokens=True)
             parsed = _parse_generated_json(decoded)
+            parse_error = "none" if parsed else "invalid_or_non_pure_json"
             samples.append(
                 SFTSample(
                     id=f"{request.round_id}-{_slug(request.domain)}-{index}",
@@ -112,7 +114,12 @@ class LocalHFGenerationProvider(GenerationProvider):
                     source="local_hf",
                     generation_model=model_name,
                     round_id=request.round_id,
-                    metadata={"raw_output": decoded, "sample_index": index},
+                    metadata={
+                        "raw_output": decoded,
+                        "sample_index": index,
+                        "parse_error": parse_error,
+                        "prompt_format": "chat_template" if rendered_prompt != prompt else "plain",
+                    },
                 )
             )
         return samples
@@ -132,14 +139,34 @@ class StrongLocalGenerationProvider(LocalHFGenerationProvider):
     name = "strong_local"
 
 
+def _render_generation_prompt(tokenizer, prompt: str) -> str:
+    if not hasattr(tokenizer, "apply_chat_template"):
+        return prompt
+    messages = [
+        {
+            "role": "system",
+            "content": "You generate strict JSON only. Never use markdown fences or explanatory prose.",
+        },
+        {"role": "user", "content": prompt},
+    ]
+    try:
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    except Exception:
+        return prompt
+
+
 def _parse_generated_json(text: str) -> Dict[str, Any]:
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
+    stripped = str(text or "").strip()
+    if not stripped.startswith("{") or not stripped.endswith("}"):
         return {}
     try:
-        return json.loads(match.group(0))
+        parsed = json.loads(stripped)
     except json.JSONDecodeError:
         return {}
+    if not isinstance(parsed, dict):
+        return {}
+    allowed = {"domain", "instruction", "response"}
+    return {key: parsed[key] for key in allowed if key in parsed}
 
 
 def get_generation_provider(config: Dict[str, Any]) -> GenerationProvider:

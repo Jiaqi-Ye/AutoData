@@ -11,6 +11,9 @@ from autodata.config import get_target_domains
 from autodata.data.schemas import MedMCQAExample, SFTSample, VerificationResult, to_jsonable
 from autodata.evaluation.answer_parser import parse_answer
 
+OPTION_PATTERN = re.compile(r"(?im)^\s*([ABCD])[\.\)]\s+\S+")
+RESPONSE_PREFIX_PATTERN = re.compile(r"^\s*The correct answer is ([ABCD])\.", re.IGNORECASE)
+
 
 def normalize_text(text: str) -> str:
     text = str(text or "").lower()
@@ -88,8 +91,18 @@ class DataVerifier:
             return False, "instruction_too_long"
         if len(sample.response) > self.max_response_chars:
             return False, "response_too_long"
+        if sample.source == "local_hf" and sample.metadata.get("parse_error") != "none":
+            return False, "invalid_generation_json"
+        options = self._option_labels(sample.instruction)
+        if options != {"A", "B", "C", "D"}:
+            return False, "missing_mcq_options"
+        response_answer = self._response_answer(sample.response)
+        if response_answer is None:
+            return False, "response_must_start_with_answer"
         if parse_answer(sample.response) is None:
             return False, "missing_clear_answer"
+        if response_answer not in options:
+            return False, "answer_option_missing"
         fingerprint = self._fingerprint(sample)
         if fingerprint in exact_seen:
             return False, "duplicate"
@@ -101,6 +114,15 @@ class DataVerifier:
 
     def _fingerprint(self, sample: SFTSample) -> str:
         return normalize_text(sample.domain + " " + sample.instruction + " " + sample.response)
+
+    def _option_labels(self, instruction: str) -> set[str]:
+        return {match.group(1).upper() for match in OPTION_PATTERN.finditer(instruction)}
+
+    def _response_answer(self, response: str) -> str | None:
+        match = RESPONSE_PREFIX_PATTERN.search(response)
+        if not match:
+            return None
+        return match.group(1).upper()
 
     def _is_near_duplicate(self, sample: SFTSample, accepted: List[SFTSample]) -> bool:
         for existing in accepted:

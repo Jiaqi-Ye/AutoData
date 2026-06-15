@@ -42,14 +42,24 @@ def build_generation_prompt(request: GenerationRequest, sample_index: int) -> st
     return (
         "Create one original medical multiple-choice training example for supervised fine-tuning.\n"
         "Do not quote or paraphrase any held-out evaluation question.\n"
+        "Return ONLY valid JSON. Do not use markdown fences. Do not add commentary before or after the JSON.\n"
         f"Domain: {request.domain}\n"
         f"Broad topic scope: {topic}\n"
         f"Desired data type: {request.data_type}\n"
         f"Planning rationale: {request.reason}\n"
         f"Sample index: {sample_index}\n"
-        "Return JSON with fields: domain, instruction, response.\n"
-        "The instruction should contain a question with A/B/C/D options.\n"
-        "The response must start with 'The correct answer is X.' and include a short explanation."
+        "Required JSON schema:\n"
+        "{\n"
+        f'  "domain": "{request.domain}",\n'
+        '  "instruction": "Question: ...\\nA. ...\\nB. ...\\nC. ...\\nD. ...",\n'
+        '  "response": "The correct answer is X. Explanation: ..."\n'
+        "}\n"
+        "Hard constraints:\n"
+        "- instruction must include exactly one question and all four answer options labeled A., B., C., and D.\n"
+        "- response must start exactly with 'The correct answer is X.' where X is A, B, C, or D.\n"
+        "- the correct letter in response must correspond to one of the four labeled options.\n"
+        "- explanation must be medically plausible and concise.\n"
+        "- do not include an options array; put options inside instruction only."
     )
 
 
