@@ -1,4 +1,5 @@
-from autodata.data.schemas import MedMCQAExample, SFTSample
+from autodata.data.schemas import MedMCQAExample, SFTSample, VerificationResult
+from autodata.verification.medical_critic import apply_medical_critic
 from autodata.verification.verifier import DataVerifier
 
 
@@ -48,6 +49,29 @@ def test_verifier_filters_duplicates():
     result = verifier.verify([first, duplicate], [make_eval_question()])
     assert len(result.accepted) == 1
     assert result.rejected[0]["reason"] == "duplicate"
+
+
+def test_verifier_filters_same_question_with_reworded_options():
+    verifier = DataVerifier(make_config())
+    first = sample(
+        "Question: Which muscle primarily protracts the scapula?\n"
+        "A. Serratus anterior\n"
+        "B. Trapezius\n"
+        "C. Rhomboid major\n"
+        "D. Latissimus dorsi",
+        response="The correct answer is A. Explanation: Serratus anterior protracts the scapula.",
+    )
+    variant = sample(
+        "Question: Which muscle primarily protracts the scapula?\n"
+        "A. Serratus anterior\n"
+        "B. Rhomboid major\n"
+        "C. Trapezius\n"
+        "D. Pectoralis major",
+        response="The correct answer is A. Explanation: Serratus anterior is the key protractor.",
+    )
+    result = verifier.verify([first, variant], [make_eval_question()])
+    assert len(result.accepted) == 1
+    assert result.rejected[0]["reason"] == "near_duplicate_question"
 
 
 def test_verifier_filters_heldout_leakage():
@@ -143,3 +167,32 @@ def test_verifier_rejects_ambiguous_question_stem():
     result = verifier.verify([bad], [make_eval_question()])
     assert len(result.accepted) == 0
     assert result.rejected[0]["reason"] == "ambiguous_question_stem"
+
+
+def test_mock_medical_critic_merges_after_rule_verification():
+    config = make_config()
+    config["medical_critic"] = {"enabled": True, "provider": "mock"}
+    accepted = sample(mcq_instruction("Which anatomy option is correct?"), source="mock")
+    rule_rejected = {
+        "reason": "missing_mcq_options",
+        "sample": sample("Question: Missing options", source="mock").__dict__,
+    }
+    rule_result = VerificationResult(
+        accepted=[accepted],
+        rejected=[rule_rejected],
+        report={
+            "accepted_count": 1,
+            "rejected_count": 1,
+            "accepted_by_domain": {"Anatomy": 1},
+            "rejected_by_domain": {"Anatomy": 1},
+            "rejection_reasons": {"missing_mcq_options": 1},
+        },
+    )
+
+    final_result, critic_result = apply_medical_critic(config, rule_result)
+
+    assert critic_result is not None
+    assert len(final_result.accepted) == 1
+    assert len(final_result.rejected) == 1
+    assert final_result.accepted[0].metadata["medical_critic"]["accepted"] is True
+    assert final_result.report["medical_critic"]["provider"] == "mock"

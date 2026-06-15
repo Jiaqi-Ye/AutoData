@@ -29,6 +29,18 @@ generation:
   samples_per_domain: 200
   max_new_tokens: 512
 
+verification:
+  near_duplicate_threshold: 0.995
+  question_duplicate_threshold: 0.94
+  leakage_threshold: 0.88
+
+medical_critic:
+  enabled: false
+  provider: "openai"
+  model: "gpt-4o-mini"
+  fail_closed: true
+  max_new_tokens: 384
+
 planning:
   strategy: "weakness_based"
   min_samples_per_domain: 50

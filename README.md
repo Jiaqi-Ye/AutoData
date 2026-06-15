@@ -82,6 +82,30 @@ USE_MOCK_GENERATION = False
 GENERATION_PROVIDER = "local_hf"
 ```
 
+### Optional Medical Critic
+
+The rule verifier checks format, leakage, duplicates, option structure, and shallow answer-option consistency. For real generated medical MCQs, add the optional LLM medical critic after rule verification and before mixture/training:
+
+```yaml
+medical_critic:
+  enabled: true
+  provider: "openai"
+  model: "gpt-4o-mini"
+  fail_closed: true
+```
+
+Set `OPENAI_API_KEY` in the environment before using `provider: "openai"`. To use the current local Qwen/Transformers path instead:
+
+```yaml
+medical_critic:
+  enabled: true
+  provider: "local_hf"
+  local_model: "Qwen/Qwen2.5-1.5B-Instruct"
+  fail_closed: true
+```
+
+The critic rejects samples with medical errors, multiple plausible answers, answer-letter mismatches, contradictory explanations, or low-value template-like wording. Keep it disabled in smoke mode.
+
 ## Output Location
 
 Colab configs save to:
@@ -114,6 +138,8 @@ evaluation_after.json
 next_round_recommendation.json
 round_summary.json
 ```
+
+When `medical_critic.enabled=true`, the final `verified_samples.jsonl` and `verification_report.json` represent samples that passed both stages. The run also writes `rule_verified_samples.jsonl`, `rule_rejected_samples.jsonl`, `rule_verification_report.json`, `medical_critic_rejected_samples.jsonl`, and `medical_critic_report.json` for stage-by-stage inspection.
 
 Local smoke mode uses `outputs/runs/<timestamp>/` inside the repository.
 
@@ -236,13 +262,13 @@ If `efficiency_aware` has no previous-round efficiency history, it falls back to
 ## Current Limitations
 
 - Agent-guided planning is currently a structured heuristic, not an API-backed LLM planner.
-- Medical factual verification is rule-based; future work should add optional expert-model review.
+- Medical factual verification now supports an optional LLM critic, but its quality depends on the critic model and prompt calibration.
 - Real generation is available as a local Hugging Face provider, while API generation is a placeholder.
 - Full multi-round orchestration still needs a dedicated runner; single-round runs now emit the next-round recommendation needed for that extension.
 
 ## Future Work
 
-- Add stronger medical quality verification.
+- Calibrate the LLM medical critic with held-out human review.
 - Add multi-round experiment orchestration.
 - Add statistical aggregation across repeated seeds for uniform vs weakness-based vs agent-guided mixtures.
 - Add richer MedMCQA subject normalization and cached processed datasets.

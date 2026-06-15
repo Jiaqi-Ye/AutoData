@@ -18,6 +18,7 @@ from autodata.training.trainer import Trainer
 from autodata.utils.gpu import clear_gpu_memory
 from autodata.utils.io import create_timestamped_run_dir, write_json, write_jsonl
 from autodata.utils.seed import set_seed
+from autodata.verification.medical_critic import apply_medical_critic
 from autodata.verification.verifier import DataVerifier
 
 
@@ -44,7 +45,14 @@ def run_autodata_loop(config: Dict[str, Any]) -> LoopRoundResult:
     write_jsonl(run_dir / "generated_samples.jsonl", generated_samples)
     clear_gpu_memory()
 
-    verification = DataVerifier(config).verify(generated_samples, heldout_eval_examples=eval_examples)
+    rule_verification = DataVerifier(config).verify(generated_samples, heldout_eval_examples=eval_examples)
+    verification, medical_critic_result = apply_medical_critic(config, rule_verification)
+    if medical_critic_result is not None:
+        write_jsonl(run_dir / "rule_verified_samples.jsonl", rule_verification.accepted)
+        write_jsonl(run_dir / "rule_rejected_samples.jsonl", rule_verification.rejected)
+        write_json(run_dir / "rule_verification_report.json", rule_verification.report)
+        write_jsonl(run_dir / "medical_critic_rejected_samples.jsonl", medical_critic_result.rejected)
+        write_json(run_dir / "medical_critic_report.json", medical_critic_result.report)
     write_jsonl(run_dir / "verified_samples.jsonl", verification.accepted)
     write_jsonl(run_dir / "rejected_samples.jsonl", verification.rejected)
     write_json(run_dir / "verification_report.json", verification.report)

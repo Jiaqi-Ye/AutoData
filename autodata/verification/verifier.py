@@ -34,7 +34,9 @@ STOPWORDS = {
     "explanation",
     "for",
     "from",
+    "drug",
     "in",
+    "mechanism",
     "into",
     "is",
     "it",
@@ -50,6 +52,8 @@ STOPWORDS = {
     "this",
     "to",
     "which",
+    "work",
+    "works",
     "with",
 }
 
@@ -74,6 +78,7 @@ class DataVerifier:
         self.valid_domains = set(get_target_domains(config))
         verification_config = config.get("verification", {})
         self.near_duplicate_threshold = float(verification_config.get("near_duplicate_threshold", 0.995))
+        self.question_duplicate_threshold = float(verification_config.get("question_duplicate_threshold", 0.94))
         self.leakage_threshold = float(verification_config.get("leakage_threshold", 0.88))
         self.max_instruction_chars = int(verification_config.get("max_instruction_chars", 4000))
         self.max_response_chars = int(verification_config.get("max_response_chars", 4000))
@@ -113,6 +118,7 @@ class DataVerifier:
             "rejected_by_domain": dict(rejected_by_domain),
             "rejection_reasons": dict(rejection_counter),
             "near_duplicate_threshold": self.near_duplicate_threshold,
+            "question_duplicate_threshold": self.question_duplicate_threshold,
             "leakage_threshold": self.leakage_threshold,
         }
         return VerificationResult(accepted=accepted, rejected=rejected, report=report)
@@ -155,8 +161,9 @@ class DataVerifier:
         fingerprint = self._fingerprint(sample)
         if fingerprint in exact_seen:
             return False, "duplicate"
-        if self._is_near_duplicate(sample, accepted):
-            return False, "near_duplicate"
+        is_duplicate, duplicate_reason = self._is_near_duplicate(sample, accepted)
+        if is_duplicate:
+            return False, duplicate_reason
         if self._leaks_eval_question(sample, heldout_questions):
             return False, "heldout_leakage"
         return True, "accepted"
@@ -231,17 +238,21 @@ class DataVerifier:
         question = " ".join(question_lines)
         return re.sub(r"^\s*Question:\s*", "", question, flags=re.IGNORECASE).strip()
 
-    def _is_near_duplicate(self, sample: SFTSample, accepted: List[SFTSample]) -> bool:
+    def _is_near_duplicate(self, sample: SFTSample, accepted: List[SFTSample]) -> tuple[bool, str]:
+        sample_question = self._question_text(sample.instruction)
         for existing in accepted:
             if sample.domain != existing.domain:
                 continue
+            question_score = text_similarity(sample_question, self._question_text(existing.instruction))
+            if question_score >= self.question_duplicate_threshold:
+                return True, "near_duplicate_question"
             combined_score = text_similarity(
                 sample.instruction + " " + sample.response,
                 existing.instruction + " " + existing.response,
             )
             if combined_score >= self.near_duplicate_threshold:
-                return True
-        return False
+                return True, "near_duplicate"
+        return False, "accepted"
 
     def _leaks_eval_question(self, sample: SFTSample, heldout_questions: List[str]) -> bool:
         sample_text = normalize_text(sample.instruction)

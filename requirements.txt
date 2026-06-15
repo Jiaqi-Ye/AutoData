@@ -1,6 +1,7 @@
 pyyaml>=6.0
 pytest>=7.0
 tqdm>=4.66
+openai>=1.0
 
 # Optional for real MedMCQA loading, evaluation, and QLoRA training.
 datasets>=2.18

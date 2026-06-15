@@ -22,6 +22,7 @@ colab = [
   "peft>=0.11",
   "trl>=0.9",
   "bitsandbytes>=0.43",
+  "openai>=1.0",
   "tqdm>=4.66",
 ]
 
@@ -31,4 +32,3 @@ include = ["autodata*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-
