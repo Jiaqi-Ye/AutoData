@@ -15,6 +15,13 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
+OPTION_LINE_PATTERN = re.compile(r"(?im)^\s*([ABCD])[\.\)]\s+\S+")
+OPTION_VALUE_PATTERN = re.compile(r"^\s*([ABCD])[\.\)]\s*(.+?)\s*$", re.IGNORECASE)
+ANSWER_PREFIX_PATTERN = re.compile(r"^\s*The correct answer is ([ABCD])\.", re.IGNORECASE)
+ANSWER_VALUE_PATTERN = re.compile(r"(?:correct answer is|answer\s*:|option)\s*([ABCD])\b", re.IGNORECASE)
+LEADING_ANSWER_PATTERN = re.compile(r"^\s*([ABCD])(?:[\.\)]|\b)", re.IGNORECASE)
+
+
 class GenerationProvider(ABC):
     name = "base"
 
@@ -103,8 +110,8 @@ class LocalHFGenerationProvider(GenerationProvider):
             with torch.no_grad():
                 output = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
             decoded = tokenizer.decode(output[0][inputs["input_ids"].shape[-1] :], skip_special_tokens=True)
-            parsed = _parse_generated_json(decoded)
-            parse_error = "none" if parsed else "invalid_or_non_pure_json"
+            parsed, parse_status = _parse_generated_json_with_status(decoded)
+            parse_error = "none" if parsed else parse_status
             samples.append(
                 SFTSample(
                     id=f"{request.round_id}-{_slug(request.domain)}-{index}",
@@ -118,6 +125,7 @@ class LocalHFGenerationProvider(GenerationProvider):
                         "raw_output": decoded,
                         "sample_index": index,
                         "parse_error": parse_error,
+                        "json_parse_status": parse_status,
                         "prompt_format": "chat_template" if rendered_prompt != prompt else "plain",
                     },
                 )
@@ -156,17 +164,160 @@ def _render_generation_prompt(tokenizer, prompt: str) -> str:
 
 
 def _parse_generated_json(text: str) -> Dict[str, Any]:
+    parsed, _ = _parse_generated_json_with_status(text)
+    return parsed
+
+
+def _parse_generated_json_with_status(text: str) -> tuple[Dict[str, Any], str]:
+    payload, parse_status = _load_json_payload(text)
+    if not payload:
+        return {}, parse_status
+    parsed = _normalize_generated_payload(payload)
+    if not parsed.get("instruction") or not parsed.get("response"):
+        return {}, "missing_required_fields"
+    return parsed, parse_status
+
+
+def _load_json_payload(text: str) -> tuple[Dict[str, Any], str]:
     stripped = str(text or "").strip()
-    if not stripped.startswith("{") or not stripped.endswith("}"):
-        return {}
+    if not stripped:
+        return {}, "empty_generation"
+    decoder = json.JSONDecoder()
+
     try:
-        parsed = json.loads(stripped)
+        parsed, end = decoder.raw_decode(stripped)
     except json.JSONDecodeError:
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
+        parsed = None
+    else:
+        if isinstance(parsed, dict):
+            remainder = stripped[end:].strip()
+            return parsed, "pure_json" if not remainder else "extracted_json"
+
+    for start, character in enumerate(stripped):
+        if character != "{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(stripped[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed, "extracted_json"
+    return {}, "invalid_json"
+
+
+def _normalize_generated_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    domain = str(payload.get("domain", "")).strip()
+    instruction = str(
+        payload.get("instruction")
+        or payload.get("question")
+        or payload.get("stem")
+        or payload.get("prompt")
+        or ""
+    ).strip()
+    options = _normalize_options(
+        payload.get("options")
+        or payload.get("choices")
+        or payload.get("answer_choices")
+        or payload.get("answers")
+    )
+    if options and _instruction_option_labels(instruction) != {"A", "B", "C", "D"}:
+        question = instruction or "Question:"
+        if not question.lower().startswith("question:"):
+            question = f"Question: {question}"
+        option_lines = [f"{label}. {options[label]}" for label in ("A", "B", "C", "D") if label in options]
+        instruction = question.rstrip() + "\n" + "\n".join(option_lines)
+
+    response = str(payload.get("response") or payload.get("answer_explanation") or "").strip()
+    answer = _extract_answer_letter(
+        payload.get("answer")
+        or payload.get("correct_answer")
+        or payload.get("correct_option")
+        or payload.get("correct")
+    )
+    if answer is None:
+        answer = _response_answer(response)
+    explanation = str(
+        payload.get("explanation")
+        or payload.get("rationale")
+        or payload.get("reasoning")
+        or ""
+    ).strip()
+    if _response_answer(response) is None and answer is not None:
+        detail = explanation or response
+        response = f"The correct answer is {answer}."
+        if detail:
+            response += f" Explanation: {detail}"
+
     allowed = {"domain", "instruction", "response"}
-    return {key: parsed[key] for key in allowed if key in parsed}
+    normalized = {"domain": domain, "instruction": instruction, "response": response}
+    return {key: value for key, value in normalized.items() if key in allowed and value}
+
+
+def _normalize_options(raw_options: Any) -> Dict[str, str]:
+    options: Dict[str, str] = {}
+    if isinstance(raw_options, dict):
+        for label in ("A", "B", "C", "D"):
+            if label in raw_options:
+                options[label] = str(raw_options[label]).strip()
+            elif label.lower() in raw_options:
+                options[label] = str(raw_options[label.lower()]).strip()
+        return {label: _strip_option_label(text) for label, text in options.items() if text}
+
+    if not isinstance(raw_options, list):
+        return {}
+
+    for index, item in enumerate(raw_options):
+        fallback_label = chr(ord("A") + index) if index < 4 else None
+        label: str | None = None
+        text = ""
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            label_value = item.get("label") or item.get("letter") or item.get("key") or item.get("option")
+            if label_value:
+                label = _extract_answer_letter(label_value)
+            text_value = item.get("text") or item.get("content") or item.get("value") or item.get("answer")
+            text = str(text_value or "").strip()
+        if not text:
+            continue
+        match = OPTION_VALUE_PATTERN.match(text)
+        if match:
+            label = match.group(1).upper()
+            text = match.group(2).strip()
+        if label is None:
+            label = fallback_label
+        if label in {"A", "B", "C", "D"}:
+            options[label] = _strip_option_label(text)
+    return {label: text for label, text in options.items() if text}
+
+
+def _strip_option_label(text: str) -> str:
+    match = OPTION_VALUE_PATTERN.match(str(text).strip())
+    if match:
+        return match.group(2).strip()
+    return str(text).strip()
+
+
+def _instruction_option_labels(instruction: str) -> set[str]:
+    return {match.group(1).upper() for match in OPTION_LINE_PATTERN.finditer(instruction)}
+
+
+def _response_answer(response: str) -> str | None:
+    match = ANSWER_PREFIX_PATTERN.search(str(response or ""))
+    if not match:
+        return None
+    return match.group(1).upper()
+
+
+def _extract_answer_letter(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    for pattern in (ANSWER_VALUE_PATTERN, LEADING_ANSWER_PATTERN):
+        match = pattern.search(text)
+        if match:
+            return match.group(1).upper()
+    return None
 
 
 def get_generation_provider(config: Dict[str, Any]) -> GenerationProvider:
