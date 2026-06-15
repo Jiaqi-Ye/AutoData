@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from importlib import metadata
 from pathlib import Path
+import sys
 from typing import Any, Dict, List
 
 from autodata.data.schemas import DomainMetrics, EvaluationResult, MedMCQAExample
@@ -50,24 +51,50 @@ def disable_incompatible_torchao_for_peft(minimum_version: str = "0.16.0") -> bo
     if _version_tuple(torchao_version) >= _version_tuple(minimum_version):
         return False
 
+    def unavailable() -> bool:
+        return False
+
     patched = False
+    for module_name, module in list(sys.modules.items()):
+        if not module_name.startswith("peft"):
+            continue
+        if hasattr(module, "is_torchao_available"):
+            try:
+                setattr(module, "is_torchao_available", unavailable)
+                patched = True
+            except Exception:
+                pass
+
     try:
         import peft.import_utils as peft_import_utils
 
-        peft_import_utils.is_torchao_available = lambda: False
-        patched = True
-    except Exception:
-        pass
-
-    try:
-        import peft.tuners.lora.torchao as peft_lora_torchao
-
-        peft_lora_torchao.is_torchao_available = lambda: False
+        peft_import_utils.is_torchao_available = unavailable
         patched = True
     except Exception:
         pass
 
     return patched
+
+
+def hide_incompatible_torchao_from_peft_metadata(minimum_version: str = "0.16.0"):
+    """Temporarily make PEFT think old torchao is not installed."""
+    try:
+        torchao_version = metadata.version("torchao")
+    except metadata.PackageNotFoundError:
+        return None
+
+    if _version_tuple(torchao_version) >= _version_tuple(minimum_version):
+        return None
+
+    original_version = metadata.version
+
+    def version_without_old_torchao(package_name: str) -> str:
+        if package_name == "torchao":
+            raise metadata.PackageNotFoundError(package_name)
+        return original_version(package_name)
+
+    metadata.version = version_without_old_torchao
+    return original_version
 
 
 class Evaluator:
@@ -152,8 +179,13 @@ class Evaluator:
                 from peft import PeftModel
             except ImportError as exc:
                 raise RuntimeError("Install peft to evaluate a LoRA/QLoRA adapter.") from exc
+            original_metadata_version = hide_incompatible_torchao_from_peft_metadata()
             disable_incompatible_torchao_for_peft()
-            model = PeftModel.from_pretrained(model, str(adapter_path))
+            try:
+                model = PeftModel.from_pretrained(model, str(adapter_path))
+            finally:
+                if original_metadata_version is not None:
+                    metadata.version = original_metadata_version
         model.eval()
         predictions = []
         max_new_tokens = int(self.config.get("evaluation", {}).get("max_new_tokens", 8))
