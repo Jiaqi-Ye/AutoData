@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -22,6 +23,51 @@ def format_mcq_prompt(example: MedMCQAExample) -> str:
         f"D. {example.options['D']}\n"
         "Answer:"
     )
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    numeric = []
+    for part in value.replace("-", ".").split("."):
+        if not part.isdigit():
+            break
+        numeric.append(int(part))
+    return tuple(numeric)
+
+
+def disable_incompatible_torchao_for_peft(minimum_version: str = "0.16.0") -> bool:
+    """Disable PEFT's torchao dispatcher when Colab ships an old torchao.
+
+    QLoRA here uses bitsandbytes, not torchao. Some Colab images include an
+    old torchao package, and recent PEFT raises during adapter loading when it
+    detects that incompatible version. Returning False from PEFT's torchao
+    availability checks lets PEFT continue to its other LoRA dispatchers.
+    """
+    try:
+        torchao_version = metadata.version("torchao")
+    except metadata.PackageNotFoundError:
+        return False
+
+    if _version_tuple(torchao_version) >= _version_tuple(minimum_version):
+        return False
+
+    patched = False
+    try:
+        import peft.import_utils as peft_import_utils
+
+        peft_import_utils.is_torchao_available = lambda: False
+        patched = True
+    except Exception:
+        pass
+
+    try:
+        import peft.tuners.lora.torchao as peft_lora_torchao
+
+        peft_lora_torchao.is_torchao_available = lambda: False
+        patched = True
+    except Exception:
+        pass
+
+    return patched
 
 
 class Evaluator:
@@ -106,6 +152,7 @@ class Evaluator:
                 from peft import PeftModel
             except ImportError as exc:
                 raise RuntimeError("Install peft to evaluate a LoRA/QLoRA adapter.") from exc
+            disable_incompatible_torchao_for_peft()
             model = PeftModel.from_pretrained(model, str(adapter_path))
         model.eval()
         predictions = []
