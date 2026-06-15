@@ -113,11 +113,17 @@ class OpenAIMedicalCriticProvider(MedicalCriticProvider):
 
     def review(self, sample: SFTSample) -> Dict[str, Any]:
         prompt = build_critic_prompt(sample)
-        try:
-            text = self._responses_create(prompt)
-        except (AttributeError, TypeError):
-            text = self._chat_completions_create(prompt)
-        return load_json_object(text)
+        errors: List[str] = []
+        for request_name, request_fn in (
+            ("chat_json_object", self._chat_completions_json_object),
+            ("chat_json_schema", self._chat_completions_json_schema),
+            ("responses_json_schema", self._responses_create),
+        ):
+            try:
+                return load_json_object(request_fn(prompt))
+            except Exception as exc:
+                errors.append(f"{request_name}: {type(exc).__name__}: {exc}")
+        raise RuntimeError("OpenAI critic failed across request modes: " + " | ".join(errors))
 
     def _responses_create(self, prompt: str) -> str:
         kwargs = {
@@ -145,7 +151,20 @@ class OpenAIMedicalCriticProvider(MedicalCriticProvider):
             raise ValueError("OpenAI Responses API returned no output_text.")
         return str(output_text)
 
-    def _chat_completions_create(self, prompt: str) -> str:
+    def _chat_completions_json_object(self, prompt: str) -> str:
+        kwargs = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": self.temperature,
+        }
+        response = self._create_chat_completion(kwargs)
+        return str(response.choices[0].message.content or "")
+
+    def _chat_completions_json_schema(self, prompt: str) -> str:
         kwargs = {
             "model": self.model,
             "messages": [
@@ -161,15 +180,23 @@ class OpenAIMedicalCriticProvider(MedicalCriticProvider):
                 },
             },
             "temperature": self.temperature,
-            "store": False,
         }
-        try:
-            response = self.client.chat.completions.create(**kwargs)
-        except TypeError:
-            kwargs["response_format"] = {"type": "json_object"}
-            kwargs.pop("store", None)
-            response = self.client.chat.completions.create(**kwargs)
+        response = self._create_chat_completion(kwargs)
         return str(response.choices[0].message.content or "")
+
+    def _create_chat_completion(self, kwargs: Dict[str, Any]):
+        try:
+            return self.client.chat.completions.create(**kwargs)
+        except Exception as first_exc:
+            fallback_kwargs = dict(kwargs)
+            fallback_kwargs.pop("temperature", None)
+            try:
+                return self.client.chat.completions.create(**fallback_kwargs)
+            except Exception as second_exc:
+                raise RuntimeError(
+                    f"{type(first_exc).__name__}: {first_exc}; "
+                    f"retry_without_temperature={type(second_exc).__name__}: {second_exc}"
+                ) from second_exc
 
 
 class LocalHFMedicalCriticProvider(MedicalCriticProvider):
@@ -406,6 +433,22 @@ Decision rules:
 - accepted must be false if the explanation contradicts the answer or contains a medical error.
 - accepted must be false if the item is too generic, vague, or template-like to be useful for training.
 - reason should be accepted, wrong_answer, answer_option_mismatch, multiple_correct_options, ambiguous_question, medically_unsound_explanation, low_quality_template, or critic_error.
+
+Return exactly one JSON object with this shape:
+{{
+  "accepted": false,
+  "reason": "wrong_answer",
+  "confidence": 0.0,
+  "issues": ["short issue label"],
+  "checks": {{
+    "single_best_answer": false,
+    "correct_letter_matches_option": false,
+    "explanation_medically_sound": false,
+    "not_overly_template_or_duplicate": false
+  }},
+  "rationale": "Brief explanation of the decision.",
+  "suggested_correct_answer": "A"
+}}
 """
 
 

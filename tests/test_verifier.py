@@ -1,5 +1,5 @@
 from autodata.data.schemas import MedMCQAExample, SFTSample, VerificationResult
-from autodata.verification.medical_critic import apply_medical_critic
+from autodata.verification.medical_critic import OpenAIMedicalCriticProvider, apply_medical_critic
 from autodata.verification.verifier import DataVerifier
 
 
@@ -196,3 +196,55 @@ def test_mock_medical_critic_merges_after_rule_verification():
     assert len(final_result.rejected) == 1
     assert final_result.accepted[0].metadata["medical_critic"]["accepted"] is True
     assert final_result.report["medical_critic"]["provider"] == "mock"
+
+
+def test_openai_medical_critic_prefers_chat_json_object():
+    provider = object.__new__(OpenAIMedicalCriticProvider)
+    provider.model = "gpt-test"
+    provider.temperature = 0.0
+    provider.client = FakeOpenAIClient()
+
+    decision = provider.review(sample(mcq_instruction("Which option is correct?")))
+
+    assert decision["accepted"] is True
+    assert provider.client.chat.completions.calls[0]["response_format"] == {"type": "json_object"}
+
+
+class FakeOpenAIClient:
+    def __init__(self):
+        self.chat = FakeChat()
+
+
+class FakeChat:
+    def __init__(self):
+        self.completions = FakeCompletions()
+
+
+class FakeCompletions:
+    def __init__(self):
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return FakeResponse(
+            '{"accepted": true, "reason": "accepted", "confidence": 0.9, '
+            '"issues": [], "checks": {"single_best_answer": true, '
+            '"correct_letter_matches_option": true, "explanation_medically_sound": true, '
+            '"not_overly_template_or_duplicate": true}, "rationale": "ok", '
+            '"suggested_correct_answer": ""}'
+        )
+
+
+class FakeResponse:
+    def __init__(self, content):
+        self.choices = [FakeChoice(content)]
+
+
+class FakeChoice:
+    def __init__(self, content):
+        self.message = FakeMessage(content)
+
+
+class FakeMessage:
+    def __init__(self, content):
+        self.content = content
