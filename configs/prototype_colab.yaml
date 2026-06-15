@@ -2,7 +2,7 @@ project:
   name: "AutoData Agent"
   run_mode: "prototype"
   seed: 42
-  output_dir: "/content/drive/MyDrive/AutoData/outputs"
+  output_dir: "/content/autodata_outputs"
 
 dataset:
   name: "openlifescienceai/medmcqa"
@@ -56,4 +56,3 @@ training:
     - gate_proj
     - up_proj
     - down_proj
-

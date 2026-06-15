@@ -1,6 +1,6 @@
 # AutoData Agent
 
-[Open in Colab](https://colab.research.google.com/github/YOUR_USERNAME/autodata-agent/blob/main/notebooks/AutoData_Colab_Demo.ipynb)
+[Open in Colab](https://colab.research.google.com/github/Jiaqi-Ye/AutoData/blob/main/notebooks/AutoData_Colab_Demo.ipynb)
 
 AutoData Agent is a research prototype for evaluation-driven data generation and data mixture optimization for medical LLM fine-tuning. The project asks whether a model-aware data agent can generate targeted SFT data and optimize training mixtures more effectively than static, uniform, or manually designed data strategies.
 
@@ -54,9 +54,8 @@ Smoke mode should finish without a GPU, API keys, MedMCQA downloads, or Qwen mod
 ## Google Colab Setup
 
 1. Open `notebooks/AutoData_Colab_Demo.ipynb`.
-2. Set `REPO_URL` to your GitHub copy of this repository, or set `USE_DRIVE_REPO=True` if the repo is already in Google Drive.
-3. Run the notebook from top to bottom.
-4. Start with:
+2. Run the notebook from top to bottom. It clones `https://github.com/Jiaqi-Ye/AutoData.git` into `/content/autodata-agent`.
+3. Start with:
 
 ```python
 RUN_MODE = "smoke"
@@ -88,13 +87,13 @@ GENERATION_PROVIDER = "local_hf"
 Colab configs save to:
 
 ```text
-/content/drive/MyDrive/AutoData/outputs
+/content/autodata_outputs
 ```
 
 Each run creates:
 
 ```text
-/content/drive/MyDrive/AutoData/outputs/runs/<timestamp>/
+/content/autodata_outputs/runs/<timestamp>/
 ```
 
 Expected files:
