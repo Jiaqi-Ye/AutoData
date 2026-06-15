@@ -65,6 +65,10 @@ class MedicalCriticProvider(ABC):
 
     name = "base"
 
+    def health_check(self) -> None:
+        """Raise if the provider is not reachable before reviewing samples."""
+        return None
+
     @abstractmethod
     def review(self, sample: SFTSample) -> Dict[str, Any]:
         raise NotImplementedError
@@ -110,6 +114,15 @@ class OpenAIMedicalCriticProvider(MedicalCriticProvider):
         except ImportError as exc:
             raise RuntimeError("Install the optional openai package for medical_critic.provider=openai.") from exc
         self.client = OpenAI(api_key=os.environ.get(api_key_env), timeout=self.timeout)
+
+    def health_check(self) -> None:
+        try:
+            self.client.models.list()
+        except Exception as exc:
+            raise RuntimeError(
+                "OpenAI medical critic preflight failed. Check Colab network access, "
+                "OPENAI_API_KEY, and access to api.openai.com before running AutoData."
+            ) from exc
 
     def review(self, sample: SFTSample) -> Dict[str, Any]:
         prompt = build_critic_prompt(sample)
@@ -268,9 +281,13 @@ class LLMMedicalVerifier:
         self.enabled = bool(self.config.get("enabled", False))
         self.provider_name = str(self.config.get("provider", "mock")).lower()
         self.fail_closed = bool(self.config.get("fail_closed", True))
+        self.abort_on_error = bool(self.config.get("abort_on_error", self.provider_name == "openai"))
+        self.preflight_check = bool(self.config.get("preflight_check", self.provider_name == "openai"))
         self.provider: MedicalCriticProvider | None = None
         if self.enabled:
             self.provider = get_medical_critic_provider(self.provider_name, self.config, config)
+            if self.preflight_check:
+                self.provider.health_check()
 
     def verify(self, samples: Iterable[SFTSample]) -> VerificationResult:
         sample_list = list(samples)
@@ -300,6 +317,11 @@ class LLMMedicalVerifier:
             try:
                 decision = normalize_decision(self.provider.review(sample))
             except Exception as exc:
+                if self.abort_on_error:
+                    raise RuntimeError(
+                        "Medical critic failed while reviewing a sample. "
+                        "Aborting the run so this failure is not mistaken for data rejection."
+                    ) from exc
                 if not self.fail_closed:
                     decision = normalize_decision(
                         {
@@ -352,6 +374,8 @@ class LLMMedicalVerifier:
             "rejected_by_domain": dict(rejected_by_domain),
             "rejection_reasons": dict(rejection_counter),
             "fail_closed": self.fail_closed,
+            "abort_on_error": self.abort_on_error,
+            "preflight_check": self.preflight_check,
         }
         return VerificationResult(accepted=accepted, rejected=rejected, report=report)
 
@@ -369,6 +393,12 @@ def apply_medical_critic(
     final_rejected = list(rule_result.rejected) + list(critic_result.rejected)
     final_report = merge_verification_reports(rule_result.report, critic_result.report, final_rejected)
     return VerificationResult(accepted=critic_result.accepted, rejected=final_rejected, report=final_report), critic_result
+
+
+def preflight_medical_critic(config: Dict[str, Any]) -> None:
+    """Fail fast when an enabled critic provider is not reachable."""
+
+    LLMMedicalVerifier(config)
 
 
 def merge_verification_reports(

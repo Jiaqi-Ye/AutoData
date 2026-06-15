@@ -92,6 +92,8 @@ medical_critic:
   provider: "openai"
   model: "gpt-4o-mini"
   fail_closed: true
+  abort_on_error: true
+  preflight_check: true
 ```
 
 Set `OPENAI_API_KEY` in the environment before using `provider: "openai"`. To use the current local Qwen/Transformers path instead:
@@ -102,9 +104,10 @@ medical_critic:
   provider: "local_hf"
   local_model: "Qwen/Qwen2.5-1.5B-Instruct"
   fail_closed: true
+  abort_on_error: true
 ```
 
-The critic rejects samples with medical errors, multiple plausible answers, answer-letter mismatches, contradictory explanations, or low-value template-like wording. Keep it disabled in smoke mode.
+The critic rejects samples with medical errors, multiple plausible answers, answer-letter mismatches, contradictory explanations, or low-value template-like wording. With OpenAI, `preflight_check: true` fails fast if the API is unreachable, and `abort_on_error: true` stops the run if a critic call fails so infrastructure errors are not mistaken for rejected data. Keep it disabled in smoke mode.
 
 ## Output Location
 

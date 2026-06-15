@@ -39,6 +39,8 @@ medical_critic:
   provider: "openai"
   model: "gpt-4o-mini"
   fail_closed: true
+  abort_on_error: true
+  preflight_check: true
   max_new_tokens: 384
 
 planning:

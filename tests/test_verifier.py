@@ -1,5 +1,11 @@
+import pytest
+
 from autodata.data.schemas import MedMCQAExample, SFTSample, VerificationResult
-from autodata.verification.medical_critic import OpenAIMedicalCriticProvider, apply_medical_critic
+from autodata.verification.medical_critic import (
+    LLMMedicalVerifier,
+    OpenAIMedicalCriticProvider,
+    apply_medical_critic,
+)
 from autodata.verification.verifier import DataVerifier
 
 
@@ -210,9 +216,50 @@ def test_openai_medical_critic_prefers_chat_json_object():
     assert provider.client.chat.completions.calls[0]["response_format"] == {"type": "json_object"}
 
 
+def test_medical_critic_abort_on_error_raises():
+    config = make_config()
+    config["medical_critic"] = {
+        "enabled": True,
+        "provider": "mock",
+        "abort_on_error": True,
+        "preflight_check": False,
+    }
+    verifier = LLMMedicalVerifier(config)
+    verifier.provider = RaisingMedicalCriticProvider()
+
+    with pytest.raises(RuntimeError, match="Aborting the run"):
+        verifier.verify([sample(mcq_instruction("Which option is correct?"))])
+
+
+def test_openai_medical_critic_preflight_raises_clear_error():
+    provider = object.__new__(OpenAIMedicalCriticProvider)
+    provider.client = FakeOpenAIClient(models_error=ConnectionError("offline"))
+
+    with pytest.raises(RuntimeError, match="OpenAI medical critic preflight failed"):
+        provider.health_check()
+
+
+class RaisingMedicalCriticProvider:
+    name = "raising"
+
+    def review(self, _sample):
+        raise ConnectionError("offline")
+
+
 class FakeOpenAIClient:
-    def __init__(self):
+    def __init__(self, models_error=None):
         self.chat = FakeChat()
+        self.models = FakeModels(models_error)
+
+
+class FakeModels:
+    def __init__(self, error=None):
+        self.error = error
+
+    def list(self):
+        if self.error is not None:
+            raise self.error
+        return []
 
 
 class FakeChat:

@@ -18,7 +18,7 @@ from autodata.training.trainer import Trainer
 from autodata.utils.gpu import clear_gpu_memory
 from autodata.utils.io import create_timestamped_run_dir, write_json, write_jsonl
 from autodata.utils.seed import set_seed
-from autodata.verification.medical_critic import apply_medical_critic
+from autodata.verification.medical_critic import apply_medical_critic, preflight_medical_critic
 from autodata.verification.verifier import DataVerifier
 
 
@@ -27,6 +27,7 @@ def run_autodata_loop(config: Dict[str, Any]) -> LoopRoundResult:
     set_seed(int(config.get("project", {}).get("seed", 42)))
     run_dir = create_timestamped_run_dir(config.get("project", {}).get("output_dir", "outputs"))
     save_config(config, run_dir / "config.yaml")
+    preflight_medical_critic(config)
 
     eval_examples, train_pool = load_medmcqa_data(config, run_dir=run_dir)
 

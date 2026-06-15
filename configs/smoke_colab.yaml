@@ -38,6 +38,8 @@ medical_critic:
   enabled: false
   provider: "mock"
   fail_closed: true
+  abort_on_error: true
+  preflight_check: false
 
 planning:
   strategy: "weakness_based"
