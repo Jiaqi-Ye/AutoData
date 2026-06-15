@@ -180,6 +180,10 @@ models:
 
 The evaluator uses Hugging Face Transformers and asks the model to answer with one of `A/B/C/D`.
 
+### Colab PyArrow Restart Note
+
+If Colab raises a `pyarrow.lib.IpcReadOptions size changed` error after switching to real MedMCQA loading, rerun the dependency cell. The notebook reinstalls `pyarrow` and `datasets` together, restarts the runtime once, and then you should run the notebook from the top again.
+
 ## Enabling QLoRA Training
 
 Set:

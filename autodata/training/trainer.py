@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -85,27 +86,15 @@ class Trainer:
         model = prepare_model_for_kbit_training(model)
 
         dataset = Dataset.from_list([{"text": format_sft_sample(sample)} for sample in samples])
-        args = TrainingArguments(
-            output_dir=str(checkpoint_dir),
-            per_device_train_batch_size=int(self.training_config.get("per_device_train_batch_size", 1)),
-            gradient_accumulation_steps=int(self.training_config.get("gradient_accumulation_steps", 8)),
-            learning_rate=float(self.training_config.get("learning_rate", 2e-4)),
-            max_steps=int(self.training_config.get("max_steps", 50)),
-            logging_steps=5,
-            save_steps=max(int(self.training_config.get("max_steps", 50)), 1),
+        trainer = self._build_sft_trainer(
+            sft_trainer_cls=SFTTrainer,
+            model=model,
+            dataset=dataset,
+            tokenizer=tokenizer,
+            checkpoint_dir=checkpoint_dir,
+            training_arguments_cls=TrainingArguments,
             fp16=choose_compute_dtype() == torch.float16,
             bf16=choose_compute_dtype() == torch.bfloat16,
-            report_to=[],
-            remove_unused_columns=False,
-        )
-        trainer = SFTTrainer(
-            model=model,
-            train_dataset=dataset,
-            peft_config=build_lora_config(self.training_config),
-            dataset_text_field="text",
-            max_seq_length=int(self.training_config.get("max_seq_length", 512)),
-            tokenizer=tokenizer,
-            args=args,
         )
         train_output = trainer.train()
         trainer.model.save_pretrained(checkpoint_dir)
@@ -119,3 +108,78 @@ class Trainer:
             details={"train_loss": getattr(train_output, "training_loss", None)},
         )
 
+    def _training_args_kwargs(self, checkpoint_dir: Path, fp16: bool, bf16: bool) -> Dict[str, Any]:
+        max_steps = int(self.training_config.get("max_steps", 50))
+        return {
+            "output_dir": str(checkpoint_dir),
+            "per_device_train_batch_size": int(self.training_config.get("per_device_train_batch_size", 1)),
+            "gradient_accumulation_steps": int(self.training_config.get("gradient_accumulation_steps", 8)),
+            "learning_rate": float(self.training_config.get("learning_rate", 2e-4)),
+            "max_steps": max_steps,
+            "logging_steps": 5,
+            "save_steps": max(max_steps, 1),
+            "fp16": fp16,
+            "bf16": bf16,
+            "report_to": [],
+            "remove_unused_columns": False,
+        }
+
+    def _build_sft_trainer(
+        self,
+        sft_trainer_cls,
+        model,
+        dataset,
+        tokenizer,
+        checkpoint_dir: Path,
+        training_arguments_cls,
+        fp16: bool,
+        bf16: bool,
+    ):
+        """Build an SFTTrainer across TRL API versions.
+
+        TRL 0.24+ moved dataset_text_field/max_length into SFTConfig and
+        renamed tokenizer to processing_class. Older TRL releases accept those
+        values directly on SFTTrainer.
+        """
+        from autodata.training.qlora_utils import build_lora_config
+
+        trainer_signature = inspect.signature(sft_trainer_cls.__init__)
+        lora_config = build_lora_config(self.training_config)
+        max_seq_length = int(self.training_config.get("max_seq_length", 512))
+
+        if "dataset_text_field" in trainer_signature.parameters:
+            args = training_arguments_cls(**self._training_args_kwargs(checkpoint_dir, fp16, bf16))
+            return sft_trainer_cls(
+                model=model,
+                train_dataset=dataset,
+                peft_config=lora_config,
+                dataset_text_field="text",
+                max_seq_length=max_seq_length,
+                tokenizer=tokenizer,
+                args=args,
+            )
+
+        try:
+            from trl import SFTConfig
+        except ImportError as exc:
+            raise RuntimeError(
+                "This TRL version requires SFTConfig-compatible training setup. "
+                "Upgrade trl or use a release that supports SFTTrainer dataset_text_field."
+            ) from exc
+
+        args = SFTConfig(
+            **self._training_args_kwargs(checkpoint_dir, fp16, bf16),
+            dataset_text_field="text",
+            max_length=max_seq_length,
+        )
+        trainer_kwargs = {
+            "model": model,
+            "train_dataset": dataset,
+            "peft_config": lora_config,
+            "args": args,
+        }
+        if "processing_class" in trainer_signature.parameters:
+            trainer_kwargs["processing_class"] = tokenizer
+        else:
+            trainer_kwargs["tokenizer"] = tokenizer
+        return sft_trainer_cls(**trainer_kwargs)
